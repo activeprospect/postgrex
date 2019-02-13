@@ -46,14 +46,6 @@ defmodule Postgrex.Types do
   def bootstrap_query(version, {_, table}) do
     oids = :ets.select(table, [{{:"$1", :_, :_}, [], [:"$1"]}])
 
-    {typelem, join_domain} =
-      if version >= {9, 0, 0} do
-        {"coalesce(d.typelem, t.typelem)",
-         "LEFT JOIN pg_type AS d ON t.typbasetype = d.oid"}
-      else
-        {"t.typelem", ""}
-      end
-
     {rngsubtype, join_range} =
       if version >= {9, 2, 0} do
         {"coalesce(r.rngsubtype, 0)",
@@ -67,27 +59,15 @@ defmodule Postgrex.Types do
         [] ->
           ""
         _  ->
-          # equiv to `WHERE t.oid NOT IN (SELECT unnest(ARRAY[#{Enum.join(oids, ",")}]))`
-          # `unnest` is not supported in redshift or postgres version prior to 8.4
-          """
-          WHERE t.oid NOT IN (
-            SELECT (ARRAY[#{Enum.join(oids, ",")}])[i]
-            FROM generate_series(1, #{length(oids)}) AS i
-          )
-          """
+          "WHERE t.oid::INT NOT IN (SELECT unnest(ARRAY[#{Enum.join(oids, ",")}]))"
       end
 
     """
-    SELECT t.oid, t.typname, t.typsend, t.typreceive, t.typoutput, t.typinput,
-           #{typelem}, #{rngsubtype}, ARRAY (
-      SELECT a.atttypid
-      FROM pg_attribute AS a
-      WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped
-      ORDER BY a.attnum
-    )
+    SELECT t.oid, t.typname, t.typsend, t.typreceive, t.typoutput, t.typinput, t.typelem,
+    coalesce(r.rngsubtype, 0),
+    null
     FROM pg_type AS t
-    #{join_domain}
-    #{join_range}
+    LEFT JOIN pg_range AS r ON r.rngtypid = t.oid
     #{filter_oids}
     """
   end
